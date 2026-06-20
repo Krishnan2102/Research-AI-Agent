@@ -4,3 +4,4 @@ langchain-core
 pydantic
 instructor
 python-dotenv
+tavily-python
