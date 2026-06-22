@@ -4,26 +4,32 @@ from pydantic import BaseModel
 from langchain.agents import create_agent
 from langchain.messages import HumanMessage,AIMessage
 from pprint import pprint
-from tools import web_search
+from tools import web_search,web_scrape
 
 load_dotenv()
 
 class Answer(BaseModel):
-    main_content:str
-    tools_used:str
+    topic:str
+    key_points:str
+    summary:str
+    url:str
 
 system_prompt="""
-You are a research agent. When the question is asked you have to generate a deatiled response of 100 words
 
-If the user asks about a person tell these things in pointers about them:
-Name:
-Born:
-Died:
-About:
+You are a research agent. When the question is asked you have to generate a deatiled response of 100 words
+using the following tools at your disposal provided in your tools attribute:
+
+1.web_search: you search the web based on the provided query and return a list of top 2 urls
+2.web_scrape: based on the urls you get, you scrape the page for relvant content and then return the desired result according to the provided format
+
+topic:name of the topic
+key_points:key point regardind the topic in a numbered list format
+summary:summary and conclusion of the topic
+url:a numbererd list of urls you used to get the response
 
 """
 
-tools=[web_search]
+tools=[web_search,web_scrape]
 
 model=ChatGroq(model="llama-3.3-70b-versatile")
 agent=create_agent(
@@ -37,8 +43,8 @@ question={"messages":[HumanMessage(content="What are the latest match results in
 
 
 
-response=agent.invoke(
-    {"messages":[HumanMessage(content="Who is better Messi?")]}
+raw_response=agent.invoke(
+    {"messages":[HumanMessage(content="What is Project Insight in MCU?")]}
 )
 """
 for token in agent.stream(
@@ -53,4 +59,8 @@ for token in agent.stream(
         print(token.content, end="", flush=True)  
 """
 
-pprint(response['structured_response'])
+structured_llm = model.with_structured_output(Answer)
+final_answer = structured_llm.invoke(f"Synthesize the following research into the required format: {raw_response}")
+
+pprint(final_answer.model_dump())
+#pprint(response['structured_response'])

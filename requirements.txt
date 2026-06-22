@@ -5,3 +5,6 @@ pydantic
 instructor
 python-dotenv
 tavily-python
+requests
+bs4
+fake-useragent
