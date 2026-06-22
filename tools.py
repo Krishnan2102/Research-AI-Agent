@@ -27,6 +27,7 @@ def web_search(query: str) -> str:
     
     results = query_response.get('results', [])
     formatted_results = "\n".join([f"- {res['title']}: {res['url']}" for res in results])
+    return formatted_results
 
 
 @tool
