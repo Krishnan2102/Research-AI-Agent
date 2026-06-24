@@ -16,8 +16,7 @@ def web_search(query: str) -> str:
 
     """
        Search the web for information based on the query provided
-       Then it returns a list of top 2 urls which the scraping tool can use
-       to extract the required content
+       Then it returns a list of top 2 urls 
     """
 
     query_response=tavily_client.search(
