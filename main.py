@@ -4,17 +4,17 @@ from pydantic import BaseModel
 from langchain.agents import create_agent
 from langchain.messages import HumanMessage
 from pprint import pprint
-from tools import web_search,web_scrape
+from tools import web_search, web_scrape
 
 load_dotenv()
 
 class Answer(BaseModel):
-    topic:str
-    key_points:str
-    summary:str
-    source:str
+    topic: str
+    key_points: str
+    summary: str
+    source: str
 
-system_prompt="""
+system_prompt = """
 
 "Role": "Research Agent"
 "Aim": "Detailed Report of 100 words"
@@ -29,26 +29,58 @@ source:numbered list of used urls"
 
 """
 
-tools=[web_search,web_scrape]
+tools = [web_search, web_scrape]
 
-model=ChatGroq(model="meta-llama/llama-4-scout-17b-16e-instruct")
-agent=create_agent(
+model = ChatGroq(model="meta-llama/llama-4-scout-17b-16e-instruct")
+agent = create_agent(
     model=model,
     system_prompt=system_prompt,
     tools=tools
 )
 
-question={"messages":[HumanMessage(content="What are the latest match results in Fifa?")]}
-
-
-
-raw_response=agent.invoke(
-    {"messages":[HumanMessage(content="Who is Tony Stark?")]}
-)
-last_message = raw_response["messages"][-1].content
-
 structured_llm = model.with_structured_output(Answer)
-final_answer = structured_llm.invoke(f"Synthesize the following research into the required format: {last_message}")
 
-pprint(final_answer.model_dump())
 
+def get_answer(query: str) -> dict:
+    """Run one stateless turn: invoke the agent on the query, then
+    synthesize the raw agent output into the structured Answer format."""
+    raw_response = agent.invoke(
+        {"messages": [HumanMessage(content=query)]}
+    )
+    last_message = raw_response["messages"][-1].content
+
+    final_answer = structured_llm.invoke(
+        f"Synthesize the following research into the required format: {last_message}"
+    )
+    return final_answer.model_dump()
+
+
+def main():
+    print("Research Agent Chatbot")
+    print("Type your question and press Enter. Type 'exit' or 'quit' to stop.\n")
+
+    while True:
+        try:
+            query = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nExiting.")
+            break
+
+        if not query:
+            continue
+
+        if query.lower() in ("exit", "quit"):
+            print("Exiting.")
+            break
+
+        try:
+            answer = get_answer(query)
+            print()
+            pprint(answer)
+            print()
+        except Exception as e:
+            print(f"\n[Error] Something went wrong while processing that query: {e}\n")
+
+
+if __name__ == "__main__":
+    main()
