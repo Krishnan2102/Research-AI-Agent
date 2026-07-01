@@ -9,3 +9,10 @@ requests
 bs4
 fake-useragent
 langgraph
+streamlit
+langchain-community
+pypdf
+pymupdf
+sentence-transformers
+chromadb
+faiss-cpu
