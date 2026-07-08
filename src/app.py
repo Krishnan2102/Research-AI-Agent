@@ -1,9 +1,9 @@
 import os
 import tempfile
-
 import streamlit as st
 from main import get_answer
 from rag import ingest_pdf
+import asyncio
 
 
 def render_answer(answer: dict):
@@ -14,7 +14,6 @@ def render_answer(answer: dict):
     st.markdown(answer["summary"])
     st.markdown("**Sources:**")
     st.markdown(answer["source"])
-
     source_type = answer.get("source_type")
     if source_type:
         label = "📚 Local knowledge (RAG)" if source_type == "rag" else "🌐 Web search"
@@ -44,7 +43,6 @@ with st.sidebar:
                         tmp_path = tmp_file.name
 
                     result = ingest_pdf(tmp_path)
-
                     os.remove(tmp_path)
 
                     if result["status"] == "success":
@@ -65,7 +63,7 @@ with st.sidebar:
 
 # --- Main chat area ---
 if "history" not in st.session_state:
-    st.session_state.history = []  
+    st.session_state.history = []
 
 # Render past messages
 for role, content in st.session_state.history:
@@ -77,7 +75,6 @@ for role, content in st.session_state.history:
 
 # Chat input
 query = st.chat_input("Ask a research question...")
-
 if query:
     st.session_state.history.append(("user", query))
     with st.chat_message("user"):
@@ -86,10 +83,12 @@ if query:
     with st.chat_message("assistant"):
         with st.spinner("Researching..."):
             try:
-                answer = get_answer(query)
+                answer = asyncio.run(get_answer(query))
                 render_answer(answer)
                 st.session_state.history.append(("assistant", answer))
             except Exception as e:
+                import traceback
+                traceback.print_exc()  # full details go to the terminal
                 error_msg = f"Something went wrong while processing that query: {e}"
                 st.error(error_msg)
                 st.session_state.history.append(("assistant", error_msg))

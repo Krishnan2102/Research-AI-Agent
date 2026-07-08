@@ -49,7 +49,9 @@ def web_scrape(url:str) -> str:
         lines = (line.strip() for line in text.splitlines())
         chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
         clean_text = '\n'.join(chunk for chunk in chunks if chunk)
-
+        MAX_CHARS=8000
+        if(len(clean_text)>MAX_CHARS):
+            return clean_text[:MAX_CHARS] + "\n\n...[Content truncated for length]"
         return clean_text
     
     except requests.exceptions.RequestException as e:

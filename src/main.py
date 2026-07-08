@@ -1,6 +1,9 @@
+import asyncio
+
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
-from pydantic import BaseModel
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from pydantic import BaseModel,Field
 from langchain.agents import create_agent
 from langchain.messages import HumanMessage
 from pprint import pprint
@@ -11,17 +14,16 @@ load_dotenv()
 
 # Similarity threshold for deciding whether RAG's local knowledge is
 # "good enough" to answer without falling back to web search/scrape.
-# Tune this constant as needed.
+
 RAG_SIMILARITY_THRESHOLD = 0.35
 RAG_TOP_K = 5
 
-
 class Answer(BaseModel):
-    topic: str
-    key_points: str
-    summary: str
-    source: str
-    source_type: str  
+    topic: str = Field(description="The main topic, title, or subject of the query. MUST be included.")
+    key_points: str = Field(description="A detailed, numbered list of the most important key points.")
+    summary: str = Field(description="A concise paragraph summarizing the answer.")
+    source: str = Field(description="The document name, URLs, or source of the information.")
+    source_type: str = Field(description="The type of source used (e.g., 'rag', 'web', 'pdf').")
 
 
 system_prompt = """
@@ -29,27 +31,63 @@ system_prompt = """
 "Role": "Research Agent"
 "Aim": "Detailed Report of 100 words"
 "Tools":
-{"web_search": "search the web , return top 2 urls",
-"web_scrape": scrape the urls, extract relevant information"}
-"Result_format": 
+{
+  "web_search": "search the web, return top 2 urls",
+  "web_scrape": "scrape the urls, extract relevant information",
+  "search_wikipedia": "search Wikipedia for factual summaries and verified information on specific entities, concepts, or historical events."
+}
+"Tool_selection_rule":
+"If the query asks for factual definitions, historical context, or general knowledge about a specific subject, try search_wikipedia first. If search_wikipedia returns no relevant results, or the topic is too niche/recent, fall back to web_search + web_scrape as normal."
+"Result_format":
 "topic:topic name
 key_points:numbered list of key points
 summary:summary of the topic
-source:numbered list of used urls"
-
+source:numbered list of used urls (or Wikipedia page names)"
 Note: Local knowledge (RAG) is always checked first by the system before
 you are invoked. You are only called when local knowledge was insufficient,
-so proceed with web_search and web_scrape as normal.
+so proceed with the tools above as normal.
 """
 
-tools = [web_search, web_scrape]
+
+async def _load_mcp_tools() -> list:
+        client = MultiServerMCPClient(
+            {
+                "wikipedia_remote": {
+                   
+                    "url": "http://127.0.0.1:8000/sse", 
+                    "transport": "sse",
+                    
+                    
+                }
+            }
+        )
+        return await client.get_tools()
+
+ 
+
 
 model = ChatGroq(model="meta-llama/llama-4-scout-17b-16e-instruct")
-agent = create_agent(
-    model=model,
-    system_prompt=system_prompt,
-    tools=tools
-)
+
+
+async def _build_agent():
+    """
+    Build a fresh agent for each query, with a fresh MCP connection.
+
+    Why not build this once at startup: the MCP client's connection is
+    tied to the asyncio event loop that created it. asyncio.run() closes
+    that loop as soon as tool-loading finishes, which kills the
+    connection - so any *later* tool call fails with "Session
+    terminated". Reconnecting per-query costs one extra round trip to
+    the MCP server, but avoids using a dead connection.
+    """
+
+    mcp_tools = await _load_mcp_tools()
+    tools = [web_search, web_scrape, *mcp_tools]
+    return create_agent(
+        model=model,
+        system_prompt=system_prompt,
+        tools=tools
+    )
 
 structured_llm = model.with_structured_output(Answer)
 
@@ -74,10 +112,11 @@ def _answer_from_rag(query: str, rag_results: list) -> dict:
     return result
 
 
-def _answer_from_web(query: str) -> dict:
-    """Existing agent flow: web_search + web_scrape tools, then
-    synthesize into the structured Answer format."""
-    raw_response = agent.invoke(
+async def _answer_from_web(query: str) -> dict:
+    """Existing agent flow: web_search + web_scrape + arxiv_search tools,
+    then synthesize into the structured Answer format."""
+    agent = await _build_agent()
+    raw_response = await agent.ainvoke(
         {"messages": [HumanMessage(content=query)]}
     )
     last_message = raw_response["messages"][-1].content
@@ -90,7 +129,7 @@ def _answer_from_web(query: str) -> dict:
     return result
 
 
-def get_answer(query: str) -> dict:
+async def get_answer(query: str) -> dict:
     """
     RAG-first routing (enforced in code, not left to the LLM):
 
@@ -102,7 +141,7 @@ def get_answer(query: str) -> dict:
        web tools are never invoked.
     3. If RAG returns nothing (empty list — either no documents ingested,
        or nothing met the threshold), fall back to the existing agent flow
-       which uses web_search and web_scrape.
+       which uses web_search, web_scrape, and now arxiv_search.
     """
     rag_results = retrieve_from_rag(
         query,
@@ -113,7 +152,7 @@ def get_answer(query: str) -> dict:
     if rag_results:
         return _answer_from_rag(query, rag_results)
 
-    return _answer_from_web(query)
+    return await _answer_from_web(query)
 
 
 def main():
@@ -135,12 +174,15 @@ def main():
             break
 
         try:
-            answer = get_answer(query)
+            answer = asyncio.run(get_answer(query))
             print()
             pprint(answer)
             print()
         except Exception as e:
-            print(f"\n[Error] Something went wrong while processing that query: {e}\n")
+            import traceback
+            print(f"\n[Error] Something went wrong while processing that query: {e}")
+            traceback.print_exc()
+            print()
 
 
 if __name__ == "__main__":

@@ -16,3 +16,7 @@ pymupdf
 sentence-transformers
 chromadb
 faiss-cpu
+langchain-mcp-adapters
+mcp
+fastmcp
+wikipedia
