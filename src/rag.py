@@ -138,17 +138,38 @@ class RAGRetreiver:
         self.vector_store = vector_store
         self.embedding_manager = embedding_manager
 
-    def retrieve(self, query: str, top_k: int = 5, score_threshold: float = 0.0) -> List[Dict[str, Any]]:
+    def retrieve(
+        self,
+        query: str,
+        top_k: int = 5,
+        score_threshold: float = 0.0,
+        allowed_domains: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
         print(f"Retrieving documents for query: '{query}'")
-        print(f"Top K: {top_k}, Score Threshold: {score_threshold}")
+        print(f"Top K: {top_k}, Score Threshold: {score_threshold}, Allowed domains: {allowed_domains}")
 
         query_embedding = self.embedding_manager.generate_embeddings([query])[0]
 
+        # allowed_domains=None or [] means unrestricted (e.g. admin role).
+        # Otherwise restrict Chroma's search to only chunks tagged with one
+        # of the caller's allowed domains, at the DB level -- not filtered
+        # after the fact, so out-of-domain chunks never even surface.
+        where_clause = None
+        if allowed_domains:
+            if len(allowed_domains) == 1:
+                where_clause = {"domain": allowed_domains[0]}
+            else:
+                where_clause = {"domain": {"$in": allowed_domains}}
+
+        query_kwargs = {
+            "query_embeddings": [query_embedding.tolist()],
+            "n_results": top_k,
+        }
+        if where_clause is not None:
+            query_kwargs["where"] = where_clause
+
         try:
-            results = self.vector_store.collection.query(
-                query_embeddings=[query_embedding.tolist()],
-                n_results=top_k
-            )
+            results = self.vector_store.collection.query(**query_kwargs)
 
             retrieved_docs = []
 
@@ -302,7 +323,7 @@ class RAGPipeline:
         self.top_k = top_k
         self.score_threshold = score_threshold
 
-    def ask(self, query: str) -> Dict[str, Any]:
+    def ask(self, query: str, allowed_domains: Optional[List[str]] = None) -> Dict[str, Any]:
         print("=" * 60)
         print(f"QUERY : {query}")
         print("=" * 60)
@@ -311,6 +332,7 @@ class RAGPipeline:
             query,
             top_k=self.top_k,
             score_threshold=self.score_threshold,
+            allowed_domains=allowed_domains,
         )
 
         result = self.llm_manager.generate(query, retrieved_docs)
@@ -335,7 +357,7 @@ rag_retriever = RAGRetreiver(vectorstore, embedding_manager)
 
 
 
-def ingest_pdf(filepath: str, chunk_size: int = 1000, chunk_overlap: int = 200) -> Dict[str, Any]:
+def ingest_pdf(filepath: str, domain: str, chunk_size: int = 1000, chunk_overlap: int = 200) -> Dict[str, Any]:
     # Check if this exact file source already exists in the Chroma collection
     existing = vectorstore.collection.get(where={"source": filepath})
     if existing and len(existing.get("ids", [])) > 0:
@@ -352,6 +374,12 @@ def ingest_pdf(filepath: str, chunk_size: int = 1000, chunk_overlap: int = 200) 
 
         chunks = split_documents(pdf_documents, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
 
+        # Tag every chunk with its domain BEFORE embedding/storage.
+        # VectorStore.add_documents() copies doc.metadata verbatim, so this
+        # is the only place domain tagging needs to happen.
+        for chunk in chunks:
+            chunk.metadata["domain"] = domain
+
         texts = [doc.page_content for doc in chunks]
         embeddings = embedding_manager.generate_embeddings(texts)
 
@@ -360,6 +388,7 @@ def ingest_pdf(filepath: str, chunk_size: int = 1000, chunk_overlap: int = 200) 
         return {
             "status": "success",
             "filepath": filepath,
+            "domain": domain,
             "num_chunks": len(chunks),
         }
     except Exception as e:
@@ -371,5 +400,15 @@ def ingest_pdf(filepath: str, chunk_size: int = 1000, chunk_overlap: int = 200) 
         }
 
 
-def retrieve_from_rag(query: str, top_k: int = 5, score_threshold: float = 0.3) -> List[Dict[str, Any]]:
-    return rag_retriever.retrieve(query, top_k=top_k, score_threshold=score_threshold)
+def retrieve_from_rag(
+    query: str,
+    top_k: int = 5,
+    score_threshold: float = 0.3,
+    allowed_domains: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    return rag_retriever.retrieve(
+        query,
+        top_k=top_k,
+        score_threshold=score_threshold,
+        allowed_domains=allowed_domains,
+    )
